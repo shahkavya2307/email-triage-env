@@ -1,0 +1,18 @@
+name: "email-triage"
+description: "An environment where an AI agent learns to triage customer support emails by sorting, drafting replies, and escalating emergencies quietly."
+version: "1.0.0"
+
+# Defining the shape of our environment for the judges
+environment:
+  type: "text-based"
+  actions:
+    - "spam"
+    - "archive"
+    - "reply"
+    - "escalate"
+  
+  # Letting them know we have different scoring mechanisms
+  difficulty_levels:
+    - "easy"   # Task 1: Basic sorting
+    - "medium" # Task 2: Weighted sorting
+    - "hard"   # Task 3: Escalation penalization
