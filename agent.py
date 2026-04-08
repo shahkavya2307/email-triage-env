@@ -6,9 +6,10 @@ from env import Observation, Action
 
 # Added a 120-second timeout. This tells our code to wait patiently 
 # if the massive 72B model needs a minute to "wake up" from sleep mode.
+# --- THE FIX: Look for the Judges' keys first, fallback to yours if running locally ---
 client = OpenAI(
-    base_url="https://router.huggingface.co/v1",
-    api_key=os.getenv("HF_TOKEN"),
+    base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1"),
+    api_key=os.getenv("API_KEY", os.getenv("HF_TOKEN")),
     timeout=120.0 
 )
 
