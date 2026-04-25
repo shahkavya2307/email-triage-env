@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from env import EmailEnv
-from agent import get_agent_action, clear_memory
+from agent import get_agent_action, clear_memory, get_memory
 from metrics import task1_score, task2_score, task3_score
 
 def run_local_test():
@@ -29,7 +29,7 @@ def run_local_test():
         print(f"Could not read yaml, using defaults: {e}")
 
     # 2. Initialize the environment [cite: 44, 45]
-    env = EmailEnv(num_emails=10)
+    env = EmailEnv(num_emails=15)
     obs = env.reset()
     
     actions_taken = []
@@ -56,6 +56,20 @@ def run_local_test():
             
             # 3. Extract the high-signal feedback for the NEXT loop iteration [cite: 118, 125]
             current_feedback = info.get("feedback", "")
+            
+            # --- NEW SCORING DISPLAY ---
+            conf = getattr(action, "confidence_score", 1.0)
+            if action.decision == "needs_human_review":
+                print(f"⚠️ Score: {reward.value}/1.0 - Sent to Human Review (Confidence was low: {conf:.2f}).")
+            elif reward.value == 1.0:
+                print(f"✅ Score: 1.0/1.0 - 100% Right! Good job on choosing '{action.decision}' (Confidence: {conf:.2f}).")
+            else:
+                print(f"❌ Score: {reward.value}/1.0 - Needs Improvement (Confidence: {conf:.2f}).")
+                
+            # --- SHOW GENERATED REPLY ---
+            if action.decision == "reply" and getattr(action, "reply_text", None):
+                print(f"💬 Generated Reply: {action.reply_text}")
+                
             if current_feedback:
                 print(f"📝 STICKY NOTE ADDED: {current_feedback}")
             
@@ -103,6 +117,63 @@ def run_local_test():
             for i, r in enumerate(step_rewards_history):
                 print(f"[STEP] step={i+1} reward={r}", flush=True)
             print(f"[END] task={name} score={final_score} steps={step_count}", flush=True)
+
+        # --- NEW MARKDOWN REPORT GENERATOR ---
+        try:
+            current_avg = (t1 + t2 + t3) / 3.0 * 100
+            previous_avg = None
+            
+            report_path = "triage_report.md"
+            if os.path.exists(report_path):
+                with open(report_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    match = re.search(r"\*\*Current Average Score:\*\* ([\d\.]+)%", content)
+                    if match:
+                        previous_avg = float(match.group(1))
+            
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write("# 📊 AI Email Triage Report\n\n")
+                f.write(f"**Total Emails Processed:** {step_count}\n\n")
+                
+                f.write("## 🏆 Performance Comparison\n")
+                if previous_avg is not None:
+                    f.write(f"- **Previous Average Score:** {previous_avg:.2f}%\n")
+                    diff = current_avg - previous_avg
+                    trend = "📈 Improved" if diff > 0 else ("📉 Regressed" if diff < 0 else "➖ Unchanged")
+                    f.write(f"- **Current Average Score:** {current_avg:.2f}% ({trend} by {abs(diff):.2f}%)\n\n")
+                else:
+                    f.write(f"- **Current Average Score:** {current_avg:.2f}%\n\n")
+                
+                f.write("### Task Breakdown\n")
+                f.write(f"- Task 1 (Bucketing): {t1*100:.2f}%\n")
+                f.write(f"- Task 2 (Replies): {t2*100:.2f}%\n")
+                f.write(f"- Task 3 (Escalation Safety): {t3*100:.2f}%\n\n")
+                
+                f.write("## 📝 Final Lessons Learned (Agent's Memory)\n")
+                memory = get_memory()
+                if memory:
+                    for note in memory:
+                        f.write(f"- {note}\n")
+                else:
+                    f.write("- *(No lessons learned this run! Perfect score?)*\n")
+                
+                f.write("\n## ❌ Mistakes & Human Reviews\n")
+                mistakes = False
+                for i, (info, decision) in enumerate(zip(evaluated_emails, actions_taken)):
+                    if info.get("feedback"):
+                        mistakes = True
+                        f.write(f"**Step {i+1}:**\n")
+                        f.write(f"- **AI Decision:** `{decision}`\n")
+                        f.write(f"- **Ground Truth:** `{info.get('ground_truth')}`\n")
+                        f.write(f"- **Feedback:** {info.get('feedback')}\n\n")
+                
+                if not mistakes:
+                    f.write("*Flawless victory! No mistakes made.*\n")
+                    
+            print(f"\n📄 Saved detailed report to {report_path}")
+            
+        except Exception as report_err:
+            print(f"⚠️ Failed to generate report: {report_err}")
 
 if __name__ == "__main__":
     run_local_test()

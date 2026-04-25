@@ -9,19 +9,24 @@ from env import Observation, Action
 sticky_notes = [] 
 
 def update_memory(new_feedback: str):
-    """Adds new feedback and keeps only the most recent 3 items[cite: 112]."""
+    """Adds new feedback and keeps only the most recent 10 items."""
     global sticky_notes
     if new_feedback and new_feedback.strip():
         sticky_notes.append(new_feedback.strip())
     
-    # Rolling Window: ensures the model stays focused and inference stays fast[cite: 145].
-    if len(sticky_notes) > 3:
+    # Rolling Window: Increased to 10 so it actually remembers its mistakes!
+    if len(sticky_notes) > 10:
         sticky_notes.pop(0) 
 
 def clear_memory():
     """Wipes the sliding window for a fresh episode start[cite: 45, 179]."""
     global sticky_notes
     sticky_notes = []
+
+def get_memory():
+    """Returns the current list of sticky notes."""
+    global sticky_notes
+    return sticky_notes
 # --------------------------------------------------
 
 # --- THE GRADER PROXY FIX  ---
@@ -60,6 +65,7 @@ def get_agent_action(obs: Observation, current_feedback: str = "", max_retries: 
     1. Decide the best action: spam, archive, reply, escalate.
     2. If the action is 'reply', you MUST draft a polite, helpful response.
     3. If the action is 'escalate' (e.g., severe issues, server down), you MUST NOT write a reply. Leave it empty.
+    4. CONFIDENCE SCORING: You must calculate a genuine confidence_score between 0.0 and 1.0. If the email is extremely vague, confusing, or lacks enough context to make a definitive decision, you MUST assign a confidence_score of 0.60 or lower.
     
     {feedback_section}
     
@@ -70,8 +76,10 @@ def get_agent_action(obs: Observation, current_feedback: str = "", max_retries: 
     You MUST respond ONLY with valid JSON in this exact format. DO NOT USE MARKDOWN BACKTICKS. DO NOT ADD EXTRA TEXT.
     {{
         "decision": "spam", 
-        "reply_text": "your drafted reply or null"
+        "reply_text": "your drafted reply or null",
+        "confidence_score": 0.82
     }}
+    Note: Replace the example values with your actual decision, your drafted reply, and your genuinely calculated confidence score between 0.0 and 1.0.
     """
     
     for attempt in range(max_retries):
@@ -102,6 +110,11 @@ def get_agent_action(obs: Observation, current_feedback: str = "", max_retries: 
             if parsed_json.get("decision") == "escalate":
                 parsed_json["reply_text"] = None
                 
+            # --- HUMAN-IN-THE-LOOP OVERRIDE ---
+            if float(parsed_json.get("confidence_score", 1.0)) < 0.85:
+                parsed_json["decision"] = "needs_human_review"
+                parsed_json["reply_text"] = None
+                
             return Action(**parsed_json)
             
         except Exception as e:
@@ -112,4 +125,4 @@ def get_agent_action(obs: Observation, current_feedback: str = "", max_retries: 
             
     # Absolute Fallback to keep the loop running[cite: 113].
     print("🛑 Critical Failure: Defaulting to 'archive'.")
-    return Action(decision="archive")
+    return Action(decision="archive", confidence_score=0.0)

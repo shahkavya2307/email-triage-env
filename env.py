@@ -15,13 +15,17 @@ class Observation(BaseModel):
 
 class Action(BaseModel):
     """The strict format the agent must use to reply."""
-    decision: Literal["spam", "archive", "reply", "escalate"] = Field(
+    decision: Literal["spam", "archive", "reply", "escalate", "needs_human_review"] = Field(
         description="The triage action to take on the current email."
     )
     # NEW: Allow the agent to draft a response for Medium/Hard tasks
     reply_text: Optional[str] = Field(
         default=None, 
         description="If decision is 'reply', write the suggested response here. Otherwise, leave null."
+    )
+    confidence_score: float = Field(
+        default=1.0,
+        description="The agent's confidence in its decision (0.0 to 1.0)."
     )
 
 class Reward(BaseModel):
@@ -47,6 +51,7 @@ class EmailEnv:
             ("Issue with my order #1234", "I was charged twice. Please help.", "reply", ["order", "id", "apologize", "refund", "check", "sorry"]),
             ("Server down!!!", "Production server is not responding!", "escalate", []),
             ("Lunch plans?", "Are we still on for lunch today?", "archive", []),
+            ("Unclear request", "Please process it as discussed. I need this done ASAP but I forgot the details.", "reply", []), # NEW: Ambiguous email
         ]
         subject, body, truth, keywords = random.choice(samples)
 
@@ -61,6 +66,18 @@ class EmailEnv:
     def reset(self) -> Observation:
         """Start a fresh inbox."""
         self.emails = [self._generate_fake_email(i) for i in range(self.num_emails)]
+        
+        # --- NEW: GUARANTEE AMBIGUOUS EMAIL FOR TESTING ---
+        # We manually overwrite the first email to be our tricky one
+        # so you can see the Human-in-the-loop trigger 100% of the time on the first step.
+        self.emails[0] = {
+            "id": 0,
+            "subject": "Unclear request",
+            "body": "Please process it as discussed. I need this done ASAP but I forgot the details.",
+            "ground_truth": "reply",
+            "expected_keywords": []
+        }
+        
         self.current_index = 0
         return self.state()
 
@@ -94,8 +111,12 @@ class EmailEnv:
         # ==========================================
         feedback_text = ""
         
+        if action.decision == "needs_human_review":
+            feedback_text += f"SAFE OVERRIDE: You were unsure, so you routed to human review. The correct answer was '{email['ground_truth']}'. "
+            reward_val = 0.5
+            is_correct = False
         # Mistake 1: Wrong Bucket
-        if not is_correct:
+        elif not is_correct:
             feedback_text += f"VIOLATION: On subject '{email['subject']}', you chose '{action.decision}'. The correct action was '{email['ground_truth']}'. "
             
         # Mistake 2: The "Emergency" Rule (Task 3)
