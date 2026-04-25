@@ -1,149 +1,115 @@
-import random
-from typing import List, Dict, Tuple, Any, Literal, Optional
-from pydantic import BaseModel, Field
+import os
+import time
+import json
+from openai import OpenAI
+from env import Observation, Action
 
-# ==========================================
-# 1. OpenEnv Pydantic Models
-# ==========================================
+# --- [WINNER'S UPGRADE: MANAGED SLIDING WINDOW] ---
+# We store the notes in a list to prevent "Memory Bloat" and context errors.
+sticky_notes = [] 
 
-class Observation(BaseModel):
-    """What the agent sees at each step."""
-    id: int = Field(description="The unique ID of the email.")
-    subject: str = Field(description="The subject line of the email.")
-    body: str = Field(description="The main text body of the email.")
-    is_done: bool = Field(description="True if there are no more emails to triage.")
+def update_memory(new_feedback: str):
+    """Adds new feedback and keeps only the most recent 3 items[cite: 112]."""
+    global sticky_notes
+    if new_feedback and new_feedback.strip():
+        sticky_notes.append(new_feedback.strip())
+    
+    # Rolling Window: ensures the model stays focused and inference stays fast[cite: 145].
+    if len(sticky_notes) > 3:
+        sticky_notes.pop(0) 
 
-class Action(BaseModel):
-    """The strict format the agent must use to reply."""
-    decision: Literal["spam", "archive", "reply", "escalate"] = Field(
-        description="The triage action to take on the current email."
+def clear_memory():
+    """Wipes the sliding window for a fresh episode start[cite: 45, 179]."""
+    global sticky_notes
+    sticky_notes = []
+# --------------------------------------------------
+
+# --- THE GRADER PROXY FIX  ---
+# Detects if we are running in Meta's evaluation environment or locally.
+if "API_BASE_URL" in os.environ and "API_KEY" in os.environ:
+    client = OpenAI(
+        base_url=os.environ["API_BASE_URL"],
+        api_key=os.environ["API_KEY"],
+        timeout=120.0
     )
-    # NEW: Allow the agent to draft a response for Medium/Hard tasks
-    reply_text: Optional[str] = Field(
-        default=None, 
-        description="If decision is 'reply', write the suggested response here. Otherwise, leave null."
+    eval_model = os.environ.get("MODEL_NAME", os.environ.get("MODEL_ID", "gpt-3.5-turbo"))
+else:
+    # Fallback for local testing (Hugging Face Router)
+    client = OpenAI(
+        base_url="https://router.huggingface.co/v1",
+        api_key=os.environ.get("HF_TOKEN"),
+        timeout=120.0
     )
+    eval_model = "Qwen/Qwen2.5-72B-Instruct"
+# ---------------------------------------------
 
-class Reward(BaseModel):
-    """The reward signal returned by the environment."""
-    value: float = Field(description="Reward value (0.0 to 1.0) for the step.")
+def get_agent_action(obs: Observation, current_feedback: str = "", max_retries: int = 3) -> Action:
+    """Passes observations and rolling feedback to the LLM[cite: 22, 23]."""
+    
+    # 1. Update memory with latest environment feedback[cite: 112, 118].
+    update_memory(current_feedback)
+    
+    # 2. Format the "Sticky Notes" for the prompt[cite: 337].
+    history_display = "\n    ".join([f"- {note}" for note in sticky_notes])
+    feedback_section = f"PAST LESSONS (Correct your behavior based on these):\n    {history_display}" if sticky_notes else ""
 
-# ==========================================
-# 2. The OpenEnv Environment
-# ==========================================
+    prompt = f"""
+    You are an AI email triage agent. 
+    
+    RULES:
+    1. Decide the best action: spam, archive, reply, escalate.
+    2. If the action is 'reply', you MUST draft a polite, helpful response.
+    3. If the action is 'escalate' (e.g., severe issues, server down), you MUST NOT write a reply. Leave it empty.
+    
+    {feedback_section}
+    
+    CURRENT EMAIL:
+    Subject: {obs.subject}
+    Body: {obs.body}
 
-class EmailEnv:
-    def __init__(self, num_emails: int = 10):
-        self.num_emails = num_emails
-        self.emails: List[Dict] = []
-        self.current_index = 0
-
-    def _generate_fake_email(self, idx: int) -> Dict:
-        """Internal helper to generate synthetic data."""
-        # NEW: Added a 4th element to each tuple containing "expected_keywords" for the grader
-        samples = [
-            ("Win a FREE iPhone now!!!", "Click this link to claim your prize", "spam", []),
-            ("Meeting tomorrow", "Please confirm your availability", "archive", []),
-            ("Issue with my order #1234", "I was charged twice. Please help.", "reply", ["order", "id", "apologize", "refund", "check", "sorry"]),
-            ("Server down!!!", "Production server is not responding!", "escalate", []),
-            ("Lunch plans?", "Are we still on for lunch today?", "archive", []),
-        ]
-        subject, body, truth, keywords = random.choice(samples)
-
-        return {
-            "id": idx,
-            "subject": subject,
-            "body": body,
-            "ground_truth": truth,
-            "expected_keywords": keywords # Hidden grading criteria for Task 2
-        }
-
-    def reset(self) -> Observation:
-        """Start a fresh inbox."""
-        self.emails = [self._generate_fake_email(i) for i in range(self.num_emails)]
-        self.current_index = 0
-        return self.state()
-
-    def state(self) -> Observation:
-        """Return the current state as a typed Observation."""
-        if self.current_index >= len(self.emails):
-            # Return an empty terminal observation
-            return Observation(id=-1, subject="", body="", is_done=True)
-
-        email = self.emails[self.current_index]
-        return Observation(
-            id=email["id"],
-            subject=email["subject"],
-            body=email["body"],
-            is_done=False
-        )
-
-    def step(self, action: Action) -> Tuple[Observation, Reward, bool, Dict[str, Any]]:
-        """Agent takes an action. Returns (obs, reward, done, info)."""
-        if self.current_index >= len(self.emails):
-            return self.state(), Reward(value=0.0), True, {}
-
-        email = self.emails[self.current_index]
-
-        # Step-level reward: 1.0 for correct, 0.0 for wrong
-        is_correct = (action.decision == email["ground_truth"])
-        reward_val = 1.0 if is_correct else 0.0
-
-        # ==========================================
-        # THE WINNER'S UPGRADE: HIGH-SIGNAL FEEDBACK
-        # ==========================================
-        feedback_text = ""
-        
-        # Mistake 1: Wrong Bucket
-        if not is_correct:
-            feedback_text += f"VIOLATION: On subject '{email['subject']}', you chose '{action.decision}'. The correct action was '{email['ground_truth']}'. "
+    You MUST respond ONLY with valid JSON in this exact format. DO NOT USE MARKDOWN BACKTICKS. DO NOT ADD EXTRA TEXT.
+    {{
+        "decision": "spam", 
+        "reply_text": "your drafted reply or null"
+    }}
+    """
+    
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=eval_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0  # Keep it objective and deterministic[cite: 19].
+            )
             
-        # Mistake 2: The "Emergency" Rule (Task 3)
-        # Process Supervision: Penalize bad behavior even if they got the bucket right!
-        if action.decision == "escalate" and action.reply_text:
-            feedback_text += "CRITICAL SAFETY VIOLATION: You drafted a reply during an escalation. You MUST stay silent during server emergencies. "
-            reward_val = 0.0  # Strip their points for breaking safety rules!
+            raw_text = response.choices[0].message.content.strip()
             
-        # Mistake 3: Bad Reply Quality (Task 2)
-        if action.decision == "reply" and email["expected_keywords"]:
-            # Check if ANY of the expected keywords are in the drafted reply
-            if not action.reply_text or not any(kw in action.reply_text.lower() for kw in email["expected_keywords"]):
-                feedback_text += "VIOLATION: Your drafted reply was poor. It lacked expected helpful keywords (e.g., apologize, refund). "
-                reward_val = 0.5  # Partial credit for getting the bucket right, but failing the reply
-        # ==========================================
+            # --- THE MAGIC CLEANER [cite: 335] ---
+            # Handles models that ignore instructions and wrap JSON in markdown.
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            elif raw_text.startswith("```"):
+                raw_text = raw_text[3:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            raw_text = raw_text.strip()
+            # ------------------------------------
 
-        # The 'info' dict is perfect for storing hidden ground truth so
-        # our external metric graders can access it later without the AI seeing it.
-        info = {
-            "ground_truth": email["ground_truth"],
-            "is_correct": is_correct,
-            "expected_keywords": email["expected_keywords"], 
-            "agent_reply": action.reply_text,                
-            "feedback": feedback_text.strip() # <--- THIS FEEDS YOUR ROLLING WINDOW IN AGENT.PY!
-        }
-
-        self.current_index += 1
-        done = self.current_index >= len(self.emails)
-        next_state = self.state()
-
-        return next_state, Reward(value=reward_val), done, info
-
-# Simple sanity check
-if __name__ == "__main__":
-    test_env = EmailEnv(num_emails=2)
-    obs = test_env.reset()
-    print("Initial State:", obs.model_dump())
-    
-    # Simulate the agent making a mistake (replying to an escalation)
-    # This will trigger our new feedback logic!
-    test_action = Action(decision="escalate", reply_text="I am looking into this issue right now!")
-    
-    # Manually force the first email to be an escalation for testing
-    test_env.emails[0]["ground_truth"] = "escalate"
-    test_env.emails[0]["subject"] = "Server Down!!!"
-    
-    next_obs, reward, is_done, info_dict = test_env.step(test_action)
-    
-    print("\nAction Taken:", test_action.decision)
-    print("Reward (Should be 0 due to penalty):", reward.value)
-    print("Feedback generated for agent:", info_dict.get("feedback"))
+            parsed_json = json.loads(raw_text)
+            
+            # --- WINNER'S SAFETY OVERRIDE [cite: 87, 333] ---
+            # Force compliance with the "Silent Escalation" rule to stop reward hacking[cite: 98, 100].
+            if parsed_json.get("decision") == "escalate":
+                parsed_json["reply_text"] = None
+                
+            return Action(**parsed_json)
+            
+        except Exception as e:
+            # Resilience Engineering: Handle API delays and rate limits[cite: 339, 340].
+            wait_time = 5 * (attempt + 1)
+            print(f"⚠️ API Busy. Retrying in {wait_time}s... | Error: {e}")
+            time.sleep(wait_time)
+            
+    # Absolute Fallback to keep the loop running[cite: 113].
+    print("🛑 Critical Failure: Defaulting to 'archive'.")
+    return Action(decision="archive")
