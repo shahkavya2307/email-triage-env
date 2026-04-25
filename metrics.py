@@ -1,16 +1,21 @@
+import os
 import re
 import time
 from typing import List, Dict
 from openai import OpenAI
+from dotenv import load_dotenv
+
+# This command magically loads the hidden variables from your .env file
+load_dotenv() 
 
 # ---------------------------------------------------------
-# THE JUDGE SETUP (The Official Walkie-Talkie)
+# THE JUDGE SETUP
 # ---------------------------------------------------------
 client = OpenAI(
-    api_key="YOUR_GEMINI_API_KEY", # ⚠️ REPLACE THIS!
+    # Instead of pasting the key, we ask the operating system to fetch it!
+    api_key=os.environ.get("GEMINI_API_KEY"), 
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
 )
-
 def llm_judge_reply(original_email: str, drafted_reply: str) -> float:
     """
     Acts as a strict teacher grading the drafted reply.
