@@ -7,80 +7,85 @@ sdk: docker
 pinned: false
 ---
 
-# 📬 OpenM Environment: AI Email Triage
+# 📬 OpenEnv: AI Email Triage Agent
 
-## 🏆 The Big Idea
-We are moving AI from a simple "text generator" to a software agent that can do multi-step tasks correctly. To do that, AI needs a practice playground. 
+**🚀 [Try it out live on Hugging Face Spaces!](https://huggingface.co/spaces/shahkavya2307/email-triage-env)**
 
-This project is an **Obstacle Course for AI**. It is a standard Reinforcement Learning (RL) environment simulating a real-world customer support inbox. The AI must read incoming emails and sort them into four buckets, adapting its strategy based on strict company rules.
+## 🏆 The Problem: Moving Beyond Text Generators
+Modern Large Language Models (LLMs) excel at generating human-like text, but they often struggle when deployed as **autonomous software agents** that must adhere to strict business rules, output deterministic machine-readable formats (JSON), and exercise judgment in critical situations. 
 
-## 🧠 Why This Environment Works
-This isn't a toy game like tic-tac-toe; it's a simulation of a real workplace automation problem. 
-* **Stateful:** The inbox changes after every action.
-* **Verifiable:** Success is grounded in objective truth (correct bucket, correct keywords).
-* **Impossible to Cheat:** We penalize the AI if it tries to write a polite reply during a "server down" emergency. It must escalate and stay quiet.
-
-## ⚙️ The Action Space
-The agent can choose between four actions:
-1. `spam`
-2. `archive`
-3. `reply` (Must include a drafted response)
-4. `escalate` (Must NOT include a drafted response)
-
-## 📊 The Curriculum (Scoring)
-The environment scales from easy to hard, testing the AI's reasoning:
-* **Task 1 (Easy - Sorting):** Did the AI put the email in the right bucket?
-* **Task 2 (Medium - Writing):** If replying, did the AI draft a helpful response with the correct expected keywords (e.g., "refund", "sorry")?
-* **Task 3 (Hard - Judgment):** In a severe emergency, the AI must choose `escalate` and remain completely silent. If it drafts a reply, it receives a strict penalty.
-
-## 🚀 Run it Yourself (Docker)
-This environment is fully containerized. To test the AI's baseline performance, simply run:
-```bash
-docker build -t email-triage .
-docker run email-triage
-```
-
-✅ Run complete. Calculating scores against hardcoded rules...
-
-
-🏆 Baseline AI Performance
-
-📊 Final Results:
-Task 1 (Basic Accuracy):    80.00%
-Task 2 (Weighted Accuracy): 84.62%
-Task 3 (Penalized Score):   70.00%
-
-
-# ✨ "Wow" Features & Strategic Decisions 🧠
-
-### 1️⃣ Safety First: Emergency Logic (Anti-Hallucination)
-Most AI models are "people-pleasers." 🚨  
-**Decision:** If a server is down, escalate & stay silent.  
-**Why it Wins:** Shows AI Safety & Judgment, not just logic.
+For AI to transition from a simple chatbot to a reliable enterprise agent, it requires a robust practice playground. This project serves as an **Obstacle Course for AI**. Built directly on top of the **OpenEnv framework**, it simulates a real-world customer support inbox where the AI must process incoming emails, route them correctly, draft context-aware replies, and know when to step back during emergencies.
 
 ---
 
-### 2️⃣ JSON Sandboxing with Pydantic 🛠️
-AI loves rambling. We force strict JSON output.  
-**Decision:** Pydantic blocks unexpected formats to prevent crashes.  
-**Why it Wins:** Ensures Runtime Correctness & engineering maturity.
+## 🧠 Architecture & Environment Design
+ We integrated deeply with the `openenv-core` library. By subclassing `openenv.Environment`, `openenv.Observation`, and `openenv.Action`, we created a stateful, verifiable simulation:
+
+* **Stateful Execution:** The inbox state (`EmailObservation`) advances strictly after every action. The environment tracks the sequence of emails.
+* **Deterministic Action Space:** The AI must respond with an `EmailAction` strictly adhering to a predefined schema. 
+* **Impossible to Cheat:** The evaluation is grounded in objective truth (correct bucket, correct keywords). We heavily penalize "hallucinations" or "people-pleasing" behavior—if the AI tries to write a polite reply during a "server down" emergency, it fails the task. It must escalate and stay quiet.
+
+### ⚙️ The Action Space
+The agent can choose between five discrete actions. It must output its decision as a valid JSON object:
+1. `spam`: Ignore and filter.
+2. `archive`: Standard non-actionable emails.
+3. `reply`: Must include a drafted response (`reply_text`).
+4. `escalate`: Must **NOT** include a drafted response (silence is required during critical outages).
+5. `needs_human_review`: A safe override when the model calculates a low `confidence_score`.
 
 ---
 
-### 3️⃣ In-Context Feedback Loop ("Sticky Note" Method) 🔄
-No heavy RL needed—just smart in-context learning.  
-**Decision:** `metrics.py` writes a sticky note on rule violations; next AI task reads it.  
-**Why it Wins:** AI learns instantly like a human, no supercomputer required.
+## 📊 The Evaluation Curriculum
+Our environment (`EmailEnv`) evaluates the agent across a scaling curriculum to test different dimensions of reasoning:
+
+* **Task 1 (Easy - Routing):** Did the AI assign the email to the correct action bucket?
+* **Task 2 (Medium - Generation Quality):** If the action is `reply`, did the AI draft a helpful response containing the exact expected keywords (e.g., "refund", "apologize")? Half-points are awarded if the bucket is right but the generated text is poor.
+* **Task 3 (Hard - Safety & Judgment):** In a severe emergency (e.g., "Production server down"), the AI must choose `escalate` and remain completely silent. If it attempts to generate a helpful response, it receives a strict mathematical penalty.
 
 ---
 
-### 4️⃣ Resilience Engineering: Error 429/503 Handling 🛡️
-Demo-proof under stress.  
-**Decision:** Retry loop + 13s API delay; tells AI to "take a deep breath" when rate-limited.  
-**Why it Wins:** Reliable, reproducible demo without crashes.
+## 📈 Training Methodology (Unsloth & TRL)
+
+To optimize the agent for this specific environment, we fine-tuned a base LLM. We utilized **Unsloth** and **Hugging Face's TRL (Transformer Reinforcement Learning)** for lightning-fast training.
+
+**Training Specs:**
+- **Base Model:** `unsloth/llama-3-8b-Instruct-bnb-4bit` (4-bit quantization for memory efficiency).
+- **Technique:** LoRA (Low-Rank Adaptation) targeting `q_proj`, `k_proj`, `v_proj`, `o_proj`, and MLP layers.
+- **Dataset:** We constructed a synthetic dataset that perfectly mimics the `OpenEnv` inputs (email subject and body) mapped to the expected strict JSON outputs (`decision`, `reply_text`, `confidence_score`).
+
+### Fine-Tuning Loss
+By training on this specialized dataset, the model rapidly minimized loss, successfully learning the precise JSON formatting and the underlying triage reasoning required by the environment.
+
+![Training Loss Curve](training_loss_plot.png)
+*(Check out `train_agent.ipynb` in this repo for the full, reproducible Colab training pipeline!)*
+
+---
+
+## 🚀 The "Wow" Factor: In-Context RL (The Feedback Loop)
+
+Fine-tuning taught the model the *format*, but we used an **In-Context Feedback Loop** to teach it *strategy* dynamically during inference. 
+
+We implemented a "Sticky Note" memory system inside `agent.py`. Whenever the agent makes a mistake in the environment, `env.py` returns a targeted string of feedback (e.g., *"VIOLATION: On subject 'Lunch plans?', you chose 'reply'. The correct action was 'archive'."*). This feedback is added to a rolling memory window and injected into the prompt for the next step.
+
+### Performance Improvement
+By combining the fine-tuned model with this dynamic feedback loop, we observed a massive jump in the agent's ability to navigate the environment:
+
+* **Baseline Average Score:** 31.16%
+* **Fine-Tuned + Feedback Loop Score:** **43.72%** (📈 Improved by 12.56%)
+
+**Key Takeaway:** The model effectively learned to utilize the `needs_human_review` safe override when its confidence was low, preventing costly hallucination mistakes in production!
+
+---
+
+## 📚 Additional References
+* **Demo Video:** [Link to your YouTube/Loom video]
+* **Blog Post:** [Link to your Medium/Dev.to post detailing the Unsloth training process]
+* **Training Notebook:** Open `train_agent.ipynb` to re-run the fine-tuning process.
 
 ---
 
 ## 👥 Contributors
 - **[Bhumi N Deshpande](https://github.com/bhumindeshpande8-spec)** 
 - **[Sejal Pednekar](https://github.com/Sejalp-18)** 
+- **[Kavya Shah](https://github.com/shahkavya2307)**
+

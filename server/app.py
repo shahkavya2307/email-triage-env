@@ -4,7 +4,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI
-from env import EmailEnv, Action
+from env import EmailEnv, EmailAction
 
 app = FastAPI()
 office = EmailEnv(num_emails=10)
@@ -24,7 +24,7 @@ def state():
     return obs.model_dump()
 
 @app.post("/step")
-def step(action: Action):
+def step(action: EmailAction):
     obs, reward, done, info = office.step(action)
     return {
         "observation": obs.model_dump(),

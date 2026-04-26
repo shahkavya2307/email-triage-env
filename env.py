@@ -1,19 +1,20 @@
 import random
 from typing import List, Dict, Tuple, Any, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import Field
+from openenv import Observation, Action, Reward, Environment
 
 # ==========================================
-# 1. OpenEnv Pydantic Models
+# 1. OpenEnv Models
 # ==========================================
 
-class Observation(BaseModel):
+class EmailObservation(Observation):
     """What the agent sees at each step."""
     id: int = Field(description="The unique ID of the email.")
     subject: str = Field(description="The subject line of the email.")
     body: str = Field(description="The main text body of the email.")
     is_done: bool = Field(description="True if there are no more emails to triage.")
 
-class Action(BaseModel):
+class EmailAction(Action):
     """The strict format the agent must use to reply."""
     decision: Literal["spam", "archive", "reply", "escalate", "needs_human_review"] = Field(
         description="The triage action to take on the current email."
@@ -28,7 +29,7 @@ class Action(BaseModel):
         description="The agent's confidence in its decision (0.0 to 1.0)."
     )
 
-class Reward(BaseModel):
+class EmailReward(Reward):
     """The reward signal returned by the environment."""
     value: float = Field(description="Reward value (0.0 to 1.0) for the step.")
 
@@ -36,7 +37,7 @@ class Reward(BaseModel):
 # 2. The OpenEnv Environment
 # ==========================================
 
-class EmailEnv:
+class EmailEnv(Environment):
     def __init__(self, num_emails: int = 10):
         self.num_emails = num_emails
         self.emails: List[Dict] = []
@@ -63,7 +64,7 @@ class EmailEnv:
             "expected_keywords": keywords # Hidden grading criteria for Task 2
         }
 
-    def reset(self) -> Observation:
+    def reset(self) -> EmailObservation:
         """Start a fresh inbox."""
         self.emails = [self._generate_fake_email(i) for i in range(self.num_emails)]
         
@@ -81,24 +82,24 @@ class EmailEnv:
         self.current_index = 0
         return self.state()
 
-    def state(self) -> Observation:
+    def state(self) -> EmailObservation:
         """Return the current state as a typed Observation."""
         if self.current_index >= len(self.emails):
             # Return an empty terminal observation
-            return Observation(id=-1, subject="", body="", is_done=True)
+            return EmailObservation(id=-1, subject="", body="", is_done=True)
 
         email = self.emails[self.current_index]
-        return Observation(
+        return EmailObservation(
             id=email["id"],
             subject=email["subject"],
             body=email["body"],
             is_done=False
         )
 
-    def step(self, action: Action) -> Tuple[Observation, Reward, bool, Dict[str, Any]]:
+    def step(self, action: EmailAction) -> Tuple[EmailObservation, EmailReward, bool, Dict[str, Any]]:
         """Agent takes an action. Returns (obs, reward, done, info)."""
         if self.current_index >= len(self.emails):
-            return self.state(), Reward(value=0.0), True, {}
+            return self.state(), EmailReward(value=0.0), True, {}
 
         email = self.emails[self.current_index]
 
@@ -147,7 +148,7 @@ class EmailEnv:
         done = self.current_index >= len(self.emails)
         next_state = self.state()
 
-        return next_state, Reward(value=reward_val), done, info
+        return next_state, EmailReward(value=reward_val), done, info
 
 # Simple sanity check
 if __name__ == "__main__":
@@ -157,7 +158,7 @@ if __name__ == "__main__":
     
     # Simulate the agent making a mistake (replying to an escalation)
     # This will trigger our new feedback logic!
-    test_action = Action(decision="escalate", reply_text="I am looking into this issue right now!")
+    test_action = EmailAction(decision="escalate", reply_text="I am looking into this issue right now!")
     
     # Manually force the first email to be an escalation for testing
     test_env.emails[0]["ground_truth"] = "escalate"

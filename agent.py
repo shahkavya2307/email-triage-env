@@ -2,7 +2,7 @@ import os
 import time
 import json
 from openai import OpenAI
-from env import Observation, Action
+from env import EmailObservation, EmailAction
 
 # --- [WINNER'S UPGRADE: MANAGED SLIDING WINDOW] ---
 # We store the notes in a list to prevent "Memory Bloat" and context errors.
@@ -48,7 +48,7 @@ else:
     eval_model = "Qwen/Qwen2.5-72B-Instruct"
 # ---------------------------------------------
 
-def get_agent_action(obs: Observation, current_feedback: str = "", max_retries: int = 3) -> Action:
+def get_agent_action(obs: EmailObservation, current_feedback: str = "", max_retries: int = 3) -> EmailAction:
     """Passes observations and rolling feedback to the LLM[cite: 22, 23]."""
     
     # 1. Update memory with latest environment feedback[cite: 112, 118].
@@ -115,7 +115,7 @@ def get_agent_action(obs: Observation, current_feedback: str = "", max_retries: 
                 parsed_json["decision"] = "needs_human_review"
                 parsed_json["reply_text"] = None
                 
-            return Action(**parsed_json)
+            return EmailAction(**parsed_json)
             
         except Exception as e:
             # Resilience Engineering: Handle API delays and rate limits[cite: 339, 340].
@@ -125,4 +125,4 @@ def get_agent_action(obs: Observation, current_feedback: str = "", max_retries: 
             
     # Absolute Fallback to keep the loop running[cite: 113].
     print("🛑 Critical Failure: Defaulting to 'archive'.")
-    return Action(decision="archive", confidence_score=0.0)
+    return EmailAction(decision="archive", confidence_score=0.0)
