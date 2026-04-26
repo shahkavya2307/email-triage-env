@@ -1,7 +1,8 @@
 import random
 from typing import List, Dict, Tuple, Any, Literal, Optional
 from pydantic import Field
-from openenv import Observation, Action, Reward, Environment
+from openenv.core import Observation, Action, Environment
+from pydantic import BaseModel
 
 # ==========================================
 # 1. OpenEnv Models
@@ -29,7 +30,7 @@ class EmailAction(Action):
         description="The agent's confidence in its decision (0.0 to 1.0)."
     )
 
-class EmailReward(Reward):
+class EmailReward(BaseModel):
     """The reward signal returned by the environment."""
     value: float = Field(description="Reward value (0.0 to 1.0) for the step.")
 
